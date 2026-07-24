@@ -1,0 +1,157 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Ledger — Combined Budget Tracker</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,300;0,9..144,500;0,9..144,600;1,9..144,500&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+<!-- PDF parsing (for bank-statement PDFs) -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+<!-- Netlify Identity: handles sign up / log in ("accounts") -->
+<script src="https://identity.netlify.com/v1/netlify-identity-widget.js"></script>
+</head>
+<body>
+<div class="wrap">
+
+  <header>
+    <div class="brand">
+      <div class="seal">$</div>
+      <div>
+        <h1>Ledger</h1>
+        <div class="tagline">One ledger. Bank CSV exports or statement PDFs — your call.</div>
+      </div>
+    </div>
+    <div class="header-right" id="header-right">
+      <!-- filled in by auth.js depending on login state -->
+    </div>
+  </header>
+
+  <!-- Logged-out gate -->
+  <div id="login-gate" class="panel gate">
+    <h2>Sign in to see your ledger</h2>
+    <p>Transactions are saved to your account, not just this browser. Log in or create a free account to get started.</p>
+    <button class="btn" id="gate-login-btn">Log in / Sign up</button>
+  </div>
+
+  <!-- Main app (hidden until logged in) -->
+  <div id="app">
+
+    <div class="account-row">
+      <label for="account-select">Account</label>
+      <select id="account-select"></select>
+      <button class="btn ghost small" id="new-account-btn">+ New account</button>
+    </div>
+
+    <div id="dropzone">
+      <h2>Drop a file to import</h2>
+      <p>Accepts a bank <b>CSV</b> export (Nr, Account, Posting Date, Description, Category, Money In, Money Out, Fee, Balance columns) or a <b>PDF</b> bank statement. You can drop more than one at a time.</p>
+      <button class="btn" type="button" id="choose-file-btn">Choose file(s)</button>
+      <input id="fileInput" type="file" accept=".csv,application/pdf" multiple>
+      <div id="status"></div>
+    </div>
+
+    <div id="dashboard">
+
+      <div class="summary-row">
+        <div class="card income">
+          <div class="label">Total in</div>
+          <div class="value" id="totalIn">—</div>
+          <div class="sub" id="inSub"></div>
+        </div>
+        <div class="card expense">
+          <div class="label">Total out</div>
+          <div class="value" id="totalOut">—</div>
+          <div class="sub" id="outSub"></div>
+        </div>
+        <div class="card">
+          <div class="label">Net change</div>
+          <div class="value" id="netChange">—</div>
+          <div class="sub">across loaded transactions</div>
+        </div>
+        <div class="card">
+          <div class="label">Ending balance</div>
+          <div class="value" id="endBalance">—</div>
+          <div class="sub" id="endSub"></div>
+        </div>
+      </div>
+
+      <div class="charts-row">
+        <div class="panel">
+          <h3>Where it went</h3>
+          <div class="donut-wrap">
+            <svg id="donut-svg" width="140" height="140" viewBox="0 0 140 140"></svg>
+            <div class="donut-legend" id="donut-legend"></div>
+          </div>
+        </div>
+        <div class="panel">
+          <h3>Balance over time</h3>
+          <svg id="balance-svg" viewBox="0 0 420 160" preserveAspectRatio="none"></svg>
+        </div>
+      </div>
+
+      <div class="panel">
+        <div class="ledger-head">
+          <h3>Transaction ledger</h3>
+          <div class="controls">
+            <input type="text" id="search" placeholder="Search description…">
+            <select class="cat-filter" id="catFilter"><option value="">All categories</option></select>
+            <select class="cat-filter" id="sortSelect">
+              <option value="date-desc">Date: Newest</option>
+              <option value="date-asc">Date: Oldest</option>
+              <option value="amount-desc">Amount: High → Low</option>
+              <option value="amount-asc">Amount: Low → High</option>
+            </select>
+          </div>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr><th>Date</th><th>Description</th><th>Category</th><th style="text-align:right">Amount</th><th style="text-align:right">Balance</th></tr>
+            </thead>
+            <tbody id="tbody"></tbody>
+          </table>
+        </div>
+        <div class="foot-row">
+          <div class="count" id="rowCount"></div>
+          <div class="pagination" id="pagination"></div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+</div>
+
+<!-- Transaction detail modal -->
+<div class="modal-overlay" id="modal-overlay">
+  <div class="modal" id="modal">
+    <div class="modal-header">
+      <div class="modal-title" id="modal-title"></div>
+      <button class="modal-close" id="modal-close">✕</button>
+    </div>
+    <div id="modal-body"></div>
+  </div>
+</div>
+
+<!-- Simple prompt dialog used for naming a new account -->
+<div class="modal-overlay" id="prompt-overlay">
+  <div class="modal small">
+    <div class="modal-header">
+      <div class="modal-title">Name this account</div>
+    </div>
+    <div class="modal-body-plain">
+      <input type="text" id="prompt-input" placeholder="e.g. Checking ···1234">
+      <div class="prompt-actions">
+        <button class="btn ghost" id="prompt-cancel">Cancel</button>
+        <button class="btn" id="prompt-ok">Save</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script src="auth.js"></script>
+<script src="api.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

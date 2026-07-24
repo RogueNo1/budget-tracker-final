@@ -1,0 +1,10 @@
+[build]
+  publish = "."
+  functions = "netlify/functions"
+
+[functions]
+  node_bundler = "esbuild"
+
+# No build command needed — this is a static site with one function.
+# Netlify still runs `npm install` automatically before deploying so
+# the function's dependencies (in package.json) get bundled.
