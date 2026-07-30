@@ -42,6 +42,8 @@
       <label for="account-select">Account</label>
       <select id="account-select"></select>
       <button class="btn ghost small" id="new-account-btn">+ New account</button>
+      <div class="spacer"></div>
+      <button class="btn ghost small" id="manage-cat-btn">Manage categories</button>
     </div>
 
     <div id="dropzone">
@@ -105,10 +107,18 @@
             </select>
           </div>
         </div>
+
+        <div class="bulk-bar" id="bulk-bar">
+          <span id="bulk-count"></span>
+          <select id="bulk-cat-select"><option value="">Change category to…</option></select>
+          <button class="btn ghost small" id="bulk-delete-btn">Delete selected</button>
+          <button class="btn ghost small" id="bulk-clear-btn">Clear</button>
+        </div>
+
         <div class="table-wrap">
           <table>
             <thead>
-              <tr><th>Date</th><th>Description</th><th>Category</th><th style="text-align:right">Amount</th><th style="text-align:right">Balance</th></tr>
+              <tr><th class="chk"><input type="checkbox" id="select-all"></th><th>Date</th><th>Description</th><th>Category</th><th style="text-align:right">Amount</th><th style="text-align:right">Balance</th></tr>
             </thead>
             <tbody id="tbody"></tbody>
           </table>
@@ -123,7 +133,7 @@
   </div>
 </div>
 
-<!-- Transaction detail modal -->
+<!-- Transaction edit modal -->
 <div class="modal-overlay" id="modal-overlay">
   <div class="modal" id="modal">
     <div class="modal-header">
@@ -131,6 +141,12 @@
       <button class="modal-close" id="modal-close">✕</button>
     </div>
     <div id="modal-body"></div>
+    <div class="modal-actions">
+      <button class="btn ghost small danger" id="modal-delete">Delete</button>
+      <div class="spacer"></div>
+      <button class="btn ghost small" id="modal-cancel">Cancel</button>
+      <button class="btn small" id="modal-save">Save</button>
+    </div>
   </div>
 </div>
 
@@ -146,6 +162,23 @@
         <button class="btn ghost" id="prompt-cancel">Cancel</button>
         <button class="btn" id="prompt-ok">Save</button>
       </div>
+    </div>
+  </div>
+</div>
+
+<!-- Category manager -->
+<div class="modal-overlay" id="catmgr-overlay">
+  <div class="modal small">
+    <div class="modal-header">
+      <div class="modal-title">Manage categories</div>
+      <button class="modal-close" id="catmgr-close">✕</button>
+    </div>
+    <div class="modal-body-plain">
+      <div class="cat-add-row">
+        <input type="text" id="catmgr-input" placeholder="New category name">
+        <button class="btn small" id="catmgr-add">Add</button>
+      </div>
+      <div id="catmgr-list" class="catmgr-list"></div>
     </div>
   </div>
 </div>

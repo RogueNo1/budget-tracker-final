@@ -6,16 +6,19 @@ let filteredTxns = [];  // after account/search/category/sort filters
 let currentPage = 1;
 const PAGE_SIZE = 20;
 let currentAccount = '__all__';
+let customCategories = []; // [{id, name}] from the categories table
+let selectedIds = new Set();
+let editingId = null;
 
 const FALLBACK_COLORS = [
-  '#4FB99F','#D4A73D','#C1602B','#A9713C','#6B4F3A','#5B87A6',
-  '#8A7F6A','#9B8556','#D18B4A','#7A8FA0','#3F8F76','#5E9A87'
+  '#2451FF','#0E8F4E','#D93025','#B8860B','#7A4FE0','#0E7C86',
+  '#B23A2E','#4A4A4A','#8B5E34','#2E8B57','#6E6E6E','#C9642E'
 ];
 const CAT_COLORS = {
-  'Coffee':'#A9713C','Rent':'#6B4F3A','Staff Fee':'#9B8556','ATM & Cash':'#C1602B','Deposits':'#4FB99F',
-  'Dining':'#D18B4A','Fees':'#8C4A2A','Tithe':'#3F8F76','Groceries':'#5E9A87','Subscriptions':'#D4A73D',
-  'Transportation':'#C98F4C','Health Insurance':'#5B87A6','Other':'#8A7F6A','Data':'#7A8FA0','Donations':'#4C9C82',
-  'Uncategorised':'#8A7F6A'
+  'Coffee':'#8B5E34','Rent':'#111111','Staff Fee':'#6E6E6E','ATM & Cash':'#D93025','Deposits':'#0E8F4E',
+  'Dining':'#C9642E','Fees':'#B23A2E','Tithe':'#2451FF','Groceries':'#0E8F4E','Subscriptions':'#7A4FE0',
+  'Transportation':'#0E7C86','Health Insurance':'#2451FF','Other':'#6E6E6E','Data':'#4A4A4A','Donations':'#2E8B57',
+  'Uncategorised':'#9A9A9A'
 };
 let catColorMap = { ...CAT_COLORS };
 let colorCursor = 0;
@@ -294,10 +297,25 @@ async function reload() {
     setStatus('Could not load transactions: ' + err.message, '');
     return;
   }
+  try { customCategories = await Api.fetchCategories(); } catch (err) { customCategories = []; }
+  selectedIds.clear();
   setStatus(allTxns.length ? '' : 'No transactions yet — import a CSV or PDF above.', 'muted');
   buildAccountSelect();
   document.getElementById('dashboard').classList.toggle('visible', allTxns.length > 0);
   applyFilters();
+}
+
+// All category names known right now: built-ins, custom types, and
+// whatever categories already appear on loaded transactions.
+function allCategoryNames() {
+  const set = new Set(Object.keys(CAT_COLORS));
+  customCategories.forEach(c => set.add(c.name));
+  allTxns.forEach(t => set.add(t.category));
+  return Array.from(set).sort();
+}
+
+function escapeAttr(s) {
+  return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
 }
 
 function buildAccountSelect() {
@@ -446,15 +464,101 @@ function renderTable() {
   const slice = filteredTxns.slice(start, start + PAGE_SIZE);
   const tbody = document.getElementById('tbody');
   tbody.innerHTML = slice.map(t => `
-    <tr onclick='openModal(${JSON.stringify(t.dedupe_key)})'>
-      <td class="date">${t.date}</td>
-      <td class="desc">${t.description}</td>
-      <td><span class="cat-pill"><span class="cat-dot" style="background:${colorFor(t.category)}"></span>${t.category}</span></td>
-      <td class="amt ${t.amount >= 0 ? 'pos' : 'neg'}">${t.amount >= 0 ? '+' : ''}${fmt(t.amount)}</td>
-      <td class="bal">${t.balance !== null ? fmt(t.balance) : '—'}</td>
+    <tr>
+      <td class="chk"><input type="checkbox" class="row-chk" data-id="${t.id}" ${selectedIds.has(t.id) ? 'checked' : ''}></td>
+      <td class="date" onclick="openModal(${t.id})">${t.date}</td>
+      <td class="desc" onclick="openModal(${t.id})">${t.description}</td>
+      <td onclick="openModal(${t.id})"><span class="cat-pill"><span class="cat-dot" style="background:${colorFor(t.category)}"></span>${t.category}</span></td>
+      <td class="amt ${t.amount >= 0 ? 'pos' : 'neg'}" onclick="openModal(${t.id})">${t.amount >= 0 ? '+' : ''}${fmt(t.amount)}</td>
+      <td class="bal" onclick="openModal(${t.id})">${t.balance !== null ? fmt(t.balance) : '—'}</td>
     </tr>
   `).join('');
+  tbody.querySelectorAll('.row-chk').forEach(cb => cb.addEventListener('change', e => {
+    const id = Number(e.target.dataset.id);
+    if (e.target.checked) selectedIds.add(id); else selectedIds.delete(id);
+    updateBulkBar();
+  }));
   document.getElementById('rowCount').textContent = filteredTxns.length + ' transaction(s)';
+  updateBulkBar();
+}
+
+// ───────────────────────────────────────────────
+// Bulk selection bar (recategorize / delete many at once)
+// ───────────────────────────────────────────────
+function updateBulkBar() {
+  const bar = document.getElementById('bulk-bar');
+  const selectAll = document.getElementById('select-all');
+  if (selectedIds.size === 0) {
+    bar.classList.remove('visible');
+    if (selectAll) selectAll.checked = false;
+    return;
+  }
+  bar.classList.add('visible');
+  document.getElementById('bulk-count').textContent = selectedIds.size + ' selected';
+  const sel = document.getElementById('bulk-cat-select');
+  sel.innerHTML = '<option value="">Change category to…</option>' +
+    allCategoryNames().map(c => `<option value="${escapeAttr(c)}">${c}</option>`).join('');
+  if (selectAll) selectAll.checked = filteredTxns.length > 0 && filteredTxns.every(t => selectedIds.has(t.id));
+}
+
+async function bulkRecategorize(cat) {
+  if (!cat || selectedIds.size === 0) return;
+  setStatus('Updating ' + selectedIds.size + ' transaction(s)…', 'muted');
+  try {
+    await Api.updateTransactions(Array.from(selectedIds), { category: cat });
+    selectedIds.clear();
+    await reload();
+    setStatus('Recategorized.', 'ok');
+  } catch (err) { setStatus('Could not update: ' + err.message, ''); }
+}
+
+async function bulkDelete() {
+  if (selectedIds.size === 0) return;
+  if (!confirm('Delete ' + selectedIds.size + ' transaction(s)? This cannot be undone.')) return;
+  setStatus('Deleting…', 'muted');
+  try {
+    await Api.deleteTransactions(Array.from(selectedIds));
+    selectedIds.clear();
+    await reload();
+    setStatus('Deleted.', 'ok');
+  } catch (err) { setStatus('Could not delete: ' + err.message, ''); }
+}
+
+// ───────────────────────────────────────────────
+// Category manager (add/remove custom category types)
+// ───────────────────────────────────────────────
+function renderCategoryManager() {
+  const list = document.getElementById('catmgr-list');
+  const builtins = Object.keys(CAT_COLORS);
+  list.innerHTML =
+    '<div class="catmgr-group">Built-in</div>' +
+    builtins.map(c => `<div class="catmgr-item"><span class="cat-dot" style="background:${colorFor(c)}"></span>${c}</div>`).join('') +
+    '<div class="catmgr-group">Custom</div>' +
+    (customCategories.length
+      ? customCategories.map(c => `<div class="catmgr-item"><span class="cat-dot" style="background:${colorFor(c.name)}"></span>${c.name}<button class="chip-x" onclick="removeCategory(${c.id})">Remove</button></div>`).join('')
+      : '<div class="catmgr-empty">None yet — add one above.</div>');
+}
+
+async function addCategory() {
+  const input = document.getElementById('catmgr-input');
+  const name = input.value.trim();
+  if (!name) return;
+  try {
+    await Api.addCategory(name);
+    input.value = '';
+    customCategories = await Api.fetchCategories();
+    renderCategoryManager();
+    buildCategoryFilter();
+  } catch (err) { setStatus('Could not add category: ' + err.message, ''); }
+}
+
+async function removeCategory(id) {
+  try {
+    await Api.deleteCategory(id);
+    customCategories = await Api.fetchCategories();
+    renderCategoryManager();
+    buildCategoryFilter();
+  } catch (err) { setStatus('Could not remove category: ' + err.message, ''); }
 }
 
 function renderPagination() {
@@ -481,22 +585,64 @@ function goPage(n) {
   renderPagination();
 }
 
-function openModal(key) {
-  const t = filteredTxns.find(x => x.dedupe_key === key) || allTxns.find(x => x.dedupe_key === key);
+function openModal(id) {
+  const t = allTxns.find(x => x.id === id);
   if (!t) return;
-  document.getElementById('modal-title').textContent = t.description;
-  const rows = [
-    ['Amount', (t.amount >= 0 ? '+' : '') + fmt(t.amount)],
-    ['Date', t.date],
-    ['Category', t.category],
-    ['Fee', t.fee ? fmt(t.fee) : '—'],
-    ['Balance after', t.balance !== null ? fmt(t.balance) : '—'],
-    ['Account', t.account],
-  ];
-  document.getElementById('modal-body').innerHTML = rows.map(([k, v]) => `
-    <div class="modal-row"><span class="modal-key">${k}</span><span class="modal-val">${v}</span></div>
-  `).join('');
+  editingId = id;
+  document.getElementById('modal-title').textContent = 'Edit transaction';
+  const cats = allCategoryNames();
+  document.getElementById('modal-body').innerHTML = `
+    <label class="f-label">Description</label>
+    <input type="text" id="edit-desc" value="${escapeAttr(t.description)}">
+    <div class="f-row">
+      <div><label class="f-label">Date</label><input type="date" id="edit-date" value="${t.date}"></div>
+      <div><label class="f-label">Amount</label><input type="number" step="0.01" id="edit-amount" value="${t.amount}"></div>
+    </div>
+    <label class="f-label">Category</label>
+    <select id="edit-category">
+      ${cats.map(c => `<option value="${escapeAttr(c)}" ${c === t.category ? 'selected' : ''}>${c}</option>`).join('')}
+    </select>
+    <label class="f-label">Account</label>
+    <input type="text" id="edit-account" value="${escapeAttr(t.account)}">
+  `;
   document.getElementById('modal-overlay').classList.add('open');
+}
+
+function closeModal() {
+  document.getElementById('modal-overlay').classList.remove('open');
+  editingId = null;
+}
+
+async function saveEdit() {
+  if (editingId == null) return;
+  const amount = parseFloat(document.getElementById('edit-amount').value);
+  if (isNaN(amount)) { setStatus('Amount must be a number.', ''); return; }
+  const patch = {
+    description: document.getElementById('edit-desc').value.trim(),
+    date: document.getElementById('edit-date').value,
+    amount,
+    category: document.getElementById('edit-category').value,
+    account: document.getElementById('edit-account').value.trim() || 'Default',
+  };
+  setStatus('Saving…', 'muted');
+  try {
+    await Api.updateTransactions([editingId], patch);
+    closeModal();
+    await reload();
+    setStatus('Transaction updated.', 'ok');
+  } catch (err) { setStatus('Could not save: ' + err.message, ''); }
+}
+
+async function deleteEditing() {
+  if (editingId == null) return;
+  if (!confirm('Delete this transaction? This cannot be undone.')) return;
+  setStatus('Deleting…', 'muted');
+  try {
+    await Api.deleteTransactions([editingId]);
+    closeModal();
+    await reload();
+    setStatus('Transaction deleted.', 'ok');
+  } catch (err) { setStatus('Could not delete: ' + err.message, ''); }
 }
 
 // ───────────────────────────────────────────────
@@ -561,7 +707,28 @@ document.addEventListener('DOMContentLoaded', () => {
   document.getElementById('catFilter').addEventListener('change', applyFilters);
   document.getElementById('sortSelect').addEventListener('change', applyFilters);
 
-  document.getElementById('modal-close').addEventListener('click', () => document.getElementById('modal-overlay').classList.remove('open'));
-  document.getElementById('modal-overlay').addEventListener('click', e => { if (e.target.id === 'modal-overlay') e.target.classList.remove('open'); });
-  document.addEventListener('keydown', e => { if (e.key === 'Escape') document.getElementById('modal-overlay').classList.remove('open'); });
+  document.getElementById('modal-close').addEventListener('click', closeModal);
+  document.getElementById('modal-cancel').addEventListener('click', closeModal);
+  document.getElementById('modal-save').addEventListener('click', saveEdit);
+  document.getElementById('modal-delete').addEventListener('click', deleteEditing);
+  document.getElementById('modal-overlay').addEventListener('click', e => { if (e.target.id === 'modal-overlay') closeModal(); });
+  document.addEventListener('keydown', e => { if (e.key === 'Escape') { closeModal(); document.getElementById('catmgr-overlay').classList.remove('open'); } });
+
+  document.getElementById('select-all').addEventListener('change', e => {
+    if (e.target.checked) filteredTxns.forEach(t => selectedIds.add(t.id));
+    else filteredTxns.forEach(t => selectedIds.delete(t.id));
+    renderTable();
+  });
+  document.getElementById('bulk-cat-select').addEventListener('change', e => bulkRecategorize(e.target.value));
+  document.getElementById('bulk-delete-btn').addEventListener('click', bulkDelete);
+  document.getElementById('bulk-clear-btn').addEventListener('click', () => { selectedIds.clear(); renderTable(); });
+
+  document.getElementById('manage-cat-btn').addEventListener('click', () => {
+    renderCategoryManager();
+    document.getElementById('catmgr-overlay').classList.add('open');
+  });
+  document.getElementById('catmgr-close').addEventListener('click', () => document.getElementById('catmgr-overlay').classList.remove('open'));
+  document.getElementById('catmgr-overlay').addEventListener('click', e => { if (e.target.id === 'catmgr-overlay') e.target.classList.remove('open'); });
+  document.getElementById('catmgr-add').addEventListener('click', addCategory);
+  document.getElementById('catmgr-input').addEventListener('keydown', e => { if (e.key === 'Enter') addCategory(); });
 });

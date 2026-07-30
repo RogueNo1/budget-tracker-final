@@ -28,3 +28,19 @@ create index if not exists transactions_user_date
 -- role key, which bypasses RLS entirely) can read or write rows, so
 -- nothing here needs to trust a client-supplied token.
 alter table transactions enable row level security;
+
+-- User-defined custom categories (in addition to the built-in ones
+-- baked into CATEGORY_RULES / CAT_COLORS in app.js). Only used to
+-- populate the category picker; a transaction's category is just a
+-- text column, so nothing else needs to reference this table by id.
+create table if not exists categories (
+  id           bigint generated always as identity primary key,
+  user_id      text not null,
+  name         text not null,
+  created_at   timestamptz not null default now()
+);
+
+create unique index if not exists categories_user_name
+  on categories (user_id, name);
+
+alter table categories enable row level security;

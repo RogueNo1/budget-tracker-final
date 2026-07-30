@@ -6,6 +6,23 @@ const supabase = createClient(
   process.env.SUPABASE_SERVICE_ROLE_KEY
 );
 
+// Mirrors dedupeKey() in app.js exactly, so edits to account/date/amount/
+// description keep the dedupe index meaningful instead of going stale.
+function dedupeKey(t) {
+  const raw = [
+    String(t.account || '').trim().toLowerCase(),
+    t.date,
+    Number(t.amount).toFixed(2),
+    String(t.description || '').trim().toLowerCase().slice(0, 60)
+  ].join('|');
+  let hash = 5381;
+  for (let i = 0; i < raw.length; i++) hash = ((hash * 33) ^ raw.charCodeAt(i)) >>> 0;
+  return hash.toString(16);
+}
+
+const EDITABLE_FIELDS = ['account', 'date', 'description', 'category', 'amount', 'fee', 'balance'];
+const REHASH_FIELDS = ['account', 'date', 'description', 'amount'];
+
 // This function is the only thing that ever talks to Supabase.
 // It uses the service role key (kept secret, server-side only),
 // so the anon/public key never has to leave the server, and the
@@ -19,7 +36,7 @@ export default async (req, context) => {
   if (req.method === 'GET') {
     const { data, error } = await supabase
       .from('transactions')
-      .select('account, date, description, category, amount, fee, balance, dedupe_key')
+      .select('id, account, date, description, category, amount, fee, balance, dedupe_key')
       .eq('user_id', user.id)
       .order('date', { ascending: true });
 
@@ -60,6 +77,56 @@ export default async (req, context) => {
 
     const inserted = data ? data.length : 0;
     return Response.json({ inserted, skipped: rows.length - inserted });
+  }
+
+  // Edit one or more transactions (manual correction / recategorization,
+  // including bulk recategorize from the ledger UI).
+  // Body: { ids: [1,2,...], patch: { category?, description?, date?, amount?, account?, fee?, balance? } }
+  if (req.method === 'PATCH') {
+    let body;
+    try { body = await req.json(); } catch { body = {}; }
+    const ids = Array.isArray(body.ids) ? body.ids : (body.id != null ? [body.id] : []);
+    const patchIn = body.patch || {};
+    if (ids.length === 0) return Response.json({ error: 'No ids given' }, { status: 400 });
+
+    const update = {};
+    for (const k of EDITABLE_FIELDS) if (patchIn[k] !== undefined) update[k] = patchIn[k];
+    if (Object.keys(update).length === 0) return Response.json({ error: 'Nothing to update' }, { status: 400 });
+
+    const needsRehash = REHASH_FIELDS.some(k => k in update);
+
+    if (!needsRehash) {
+      const { error } = await supabase.from('transactions').update(update).eq('user_id', user.id).in('id', ids);
+      if (error) return Response.json({ error: error.message }, { status: 500 });
+      return Response.json({ updated: ids.length });
+    }
+
+    // Rehashing needs each row's current values merged with the patch,
+    // so fetch first, then upsert the merged rows by primary key.
+    const { data: current, error: fetchErr } = await supabase
+      .from('transactions').select('*').eq('user_id', user.id).in('id', ids);
+    if (fetchErr) return Response.json({ error: fetchErr.message }, { status: 500 });
+
+    const rows = current.map(r => {
+      const merged = { ...r, ...update };
+      merged.dedupe_key = dedupeKey(merged);
+      return merged;
+    });
+    const { error } = await supabase.from('transactions').upsert(rows, { onConflict: 'id' });
+    if (error) return Response.json({ error: error.message }, { status: 500 });
+    return Response.json({ updated: rows.length });
+  }
+
+  // Delete one or more transactions. Body: { ids: [1,2,...] }
+  if (req.method === 'DELETE') {
+    let body;
+    try { body = await req.json(); } catch { body = {}; }
+    const ids = Array.isArray(body.ids) ? body.ids : (body.id != null ? [body.id] : []);
+    if (ids.length === 0) return Response.json({ error: 'No ids given' }, { status: 400 });
+
+    const { error } = await supabase.from('transactions').delete().eq('user_id', user.id).in('id', ids);
+    if (error) return Response.json({ error: error.message }, { status: 500 });
+    return Response.json({ deleted: ids.length });
   }
 
   return new Response('Method not allowed', { status: 405 });
